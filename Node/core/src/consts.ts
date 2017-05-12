@@ -35,6 +35,7 @@ export const agent = 'botbuilder';
 export const messageType = 'message';
 export const invokeType = 'invoke';
 export const defaultConnector = '*';
+export const defaultLocale = '*';
 export const emulatorChannel = 'emulator';
 export const intentEntityType = 'intent';
 
@@ -58,11 +59,12 @@ export const Data = {
     Form: 'BotBuilder.Data.Form',
     Field: 'BotBuilder.Data.Field',
     FirstRunVersion: 'BotBuilder.Data.FirstRunVersion',
-    PreferredLocale: 'BotBuilder.Data.PreferredLocale'
+    PreferredLocale: 'BotBuilder.Data.PreferredLocale',
+    DebugAddress: 'BotBuilder.Data.DebugAddress',
+    DebugWatches: 'BotBuilder.Data.DebugWatches'
 };
 
 export const DialogId = {
-    Prompts: 'BotBuilder:Prompts',
     FirstRun: 'BotBuilder:FirstRun',
     ConfirmCancel: 'BotBuilder:ConfirmCancel',
     ConfirmInterruption: 'BotBuilder:ConfirmInterruption',
@@ -75,5 +77,16 @@ export const Id = {
 };
 
 export const Intents = {
-    Default: 'BotBuilder.Intents.Default'
+    Default: 'BotBuilder.DefaultIntent',
+    Response: 'BotBuilder.ResponseIntent',
+    Repeat: 'BotBuilder.RepeatIntent'
+};
+
+export const Entities = {
+    Response: 'BotBuilder.Entities.Response',
+    Number: 'number',
+    String: 'string',
+    Date: 'date',
+    Boolean: 'boolean',
+    Match: 'match'
 };

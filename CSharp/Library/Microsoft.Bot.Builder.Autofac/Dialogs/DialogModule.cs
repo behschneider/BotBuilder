@@ -33,18 +33,19 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using System.Resources;
 using System.Text.RegularExpressions;
 using System.Threading;
-
 using Autofac;
+using Microsoft.Bot.Builder.Autofac.Base;
 using Microsoft.Bot.Builder.Base;
+using Microsoft.Bot.Builder.ConnectorEx;
 using Microsoft.Bot.Builder.History;
 using Microsoft.Bot.Builder.Internals.Fibers;
-using Microsoft.Bot.Builder.Scorables.Internals;
 using Microsoft.Bot.Builder.Scorables;
+using Microsoft.Bot.Builder.Scorables.Internals;
 using Microsoft.Bot.Connector;
-using Microsoft.Bot.Builder.Autofac.Base;
 
 namespace Microsoft.Bot.Builder.Dialogs.Internals
 {
@@ -94,8 +95,15 @@ namespace Microsoft.Bot.Builder.Dialogs.Internals
                 .AsImplementedInterfaces()
                 .InstancePerMatchingLifetimeScope(LifetimeScopeTag);
 
+#pragma warning disable CS0618
             builder
                 .RegisterType<ResumptionCookie>()
+                .AsSelf()
+                .InstancePerMatchingLifetimeScope(LifetimeScopeTag);
+#pragma warning restore CS0618
+
+            builder
+                .Register(c => c.Resolve<IActivity>().ToConversationReference())
                 .AsSelf()
                 .InstancePerMatchingLifetimeScope(LifetimeScopeTag);
 
@@ -128,13 +136,8 @@ namespace Microsoft.Bot.Builder.Dialogs.Internals
                 .InstancePerLifetimeScope();
 
             builder
-               .Register(c => new DetectChannelCapability(c.Resolve<IAddress>()))
-               .As<IDetectChannelCapability>()
-               .InstancePerLifetimeScope();
-
-            builder
-                .Register(c => c.Resolve<IDetectChannelCapability>().Detect())
-                .As<IChannelCapability>()
+                .RegisterType<ChannelCapability>()
+                .AsImplementedInterfaces()
                 .InstancePerLifetimeScope();
 
             builder
@@ -160,14 +163,20 @@ namespace Microsoft.Bot.Builder.Dialogs.Internals
                 .InstancePerLifetimeScope();
 
             builder
-                .RegisterType<JObjectBotData>()
+                .RegisterKeyedType<JObjectBotData, IBotData>()
                 .AsSelf()
                 .InstancePerLifetimeScope();
 
             builder
-                .Register(c => new DialogTaskManagerBotDataLoader(c.Resolve<JObjectBotData>(),
-                                                 c.Resolve<IDialogTaskManager>()))
-                .As<IBotData>()
+                .RegisterKeyedType<DialogTaskManagerBotDataLoader, IBotData>()
+                .InstancePerLifetimeScope();
+
+            builder
+                .RegisterAdapterChain<IBotData>
+                (
+                    typeof(JObjectBotData),
+                    typeof(DialogTaskManagerBotDataLoader)
+                )
                 .InstancePerLifetimeScope();
 
             builder
@@ -176,8 +185,8 @@ namespace Microsoft.Bot.Builder.Dialogs.Internals
                 .InstancePerDependency();
 
             builder
-                .Register(c => new DialogTaskManager(DialogModule.BlobKey, 
-                                                     c.Resolve<JObjectBotData>(), 
+                .Register(c => new DialogTaskManager(DialogModule.BlobKey,
+                                                     c.Resolve<JObjectBotData>(),
                                                      c.Resolve<IStackStoreFactory<DialogTask>>(),
                                                      c.Resolve<Func<IDialogStack, CancellationToken, IDialogContext>>(),
                                                      c.Resolve<IEventProducer<IActivity>>()))
@@ -228,6 +237,12 @@ namespace Microsoft.Bot.Builder.Dialogs.Internals
                 .As<IScorable<IActivity, double>>()
                 .InstancePerLifetimeScope();
 
+            // scorable implementing "end conversation"
+            builder
+                .RegisterInstance(EndConversationEvent.MakeScorable())
+                .As<IScorable<IResolver, double>>()
+                .SingleInstance();
+
             builder
                 .Register(c =>
                 {
@@ -272,10 +287,39 @@ namespace Microsoft.Bot.Builder.Dialogs.Internals
                 .As<IEventLoop>()
                 .InstancePerLifetimeScope();
 
+            // register IDataBag that is used for to load/save ResumptionData
+            builder
+                .Register(c =>
+                {
+                    var cc = c.Resolve<IComponentContext>();
+                    Func<IBotDataBag> make = () =>
+                    {
+                        return cc.Resolve<IBotData>().PrivateConversationData;
+                    };
+                    return make;
+                })
+                .As<Func<IBotDataBag>>()
+                .InstancePerLifetimeScope();
+
+            builder
+                .RegisterType<ResumptionContext>()
+                .AsSelf()
+                .InstancePerLifetimeScope();
+
+            builder
+                .RegisterType<LocaleFinder>()
+                .AsSelf()
+                .AsImplementedInterfaces()
+                .InstancePerLifetimeScope();
+
             // IPostToBot services
 
             builder
                 .RegisterKeyedType<NullPostToBot, IPostToBot>()
+                .InstancePerLifetimeScope();
+
+            builder
+                .RegisterKeyedType<EventLoopDialogTask, IPostToBot>()
                 .InstancePerLifetimeScope();
 
             builder
@@ -303,12 +347,18 @@ namespace Microsoft.Bot.Builder.Dialogs.Internals
                 .InstancePerLifetimeScope();
 
             builder
+                .RegisterKeyedType<QueueDrainingDialogTask, IPostToBot>()
+                .InstancePerLifetimeScope();
+
+            builder
                 .RegisterAdapterChain<IPostToBot>
                 (
+                    typeof(EventLoopDialogTask),
+                    typeof(SetAmbientThreadCulture),
+                    typeof(QueueDrainingDialogTask),
                     typeof(PersistentDialogTask),
                     typeof(ExceptionTranslationDialogTask),
                     typeof(SerializeByConversation),
-                    typeof(SetAmbientThreadCulture),
                     typeof(PostUnhandledExceptionToUser),
                     typeof(LogPostToBot)
                 )
@@ -326,7 +376,16 @@ namespace Microsoft.Bot.Builder.Dialogs.Internals
                 .AsImplementedInterfaces()
                 .SingleInstance();
 
+            builder
+                .RegisterType<SetLocalTimestampMapper>()
+                .AsImplementedInterfaces()
+                .SingleInstance();
+
             // IBotToUser services
+            builder
+                .RegisterType<InputHintQueue>()
+                .AsImplementedInterfaces()
+                .InstancePerLifetimeScope();
 
             builder
                 .RegisterKeyedType<NullBotToUser, IBotToUser>()
@@ -334,6 +393,11 @@ namespace Microsoft.Bot.Builder.Dialogs.Internals
 
             builder
                 .RegisterKeyedType<AlwaysSendDirect_BotToUser, IBotToUser>()
+                .AsSelf()
+                .InstancePerLifetimeScope();
+
+            builder
+                .RegisterKeyedType<AutoInputHint_BotToUser, IBotToUser>()
                 .InstancePerLifetimeScope();
 
             builder
@@ -344,16 +408,17 @@ namespace Microsoft.Bot.Builder.Dialogs.Internals
                 .RegisterKeyedType<LogBotToUser, IBotToUser>()
                 .InstancePerLifetimeScope();
 
-            #pragma warning disable CS1587
+#pragma warning disable CS1587
             /// <see cref="LogBotToUser"/> is composed around <see cref="MapToChannelData_BotToUser"/> is composed around
             /// <see cref="AlwaysSendDirect_BotToUser"/>.  The complexity of registering each component is pushed to a separate
             /// registration method, and each of these components are replaceable without re-registering
             /// the entire adapter chain by registering a new component with the same component key.
-            #pragma warning restore CS1587
+#pragma warning restore CS1587
             builder
                 .RegisterAdapterChain<IBotToUser>
                 (
                     typeof(AlwaysSendDirect_BotToUser),
+                    typeof(AutoInputHint_BotToUser),
                     typeof(MapToChannelData_BotToUser),
                     typeof(LogBotToUser)
                 )

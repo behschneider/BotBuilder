@@ -39,16 +39,14 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-
 using Autofac;
-using Moq;
-using Microsoft.Bot.Builder.Luis;
 using Microsoft.Bot.Builder.Dialogs;
-using Microsoft.Bot.Builder.Luis.Models;
 using Microsoft.Bot.Builder.Internals.Fibers;
+using Microsoft.Bot.Builder.Luis;
+using Microsoft.Bot.Builder.Luis.Models;
 using Microsoft.Bot.Connector;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Moq;
 using Action = Microsoft.Bot.Builder.Luis.Models.Action;
 
 namespace Microsoft.Bot.Builder.Tests
@@ -65,16 +63,16 @@ namespace Microsoft.Bot.Builder.Tests
             return intents;
         }
 
-        public static EntityRecommendation EntityFor(string type, string entity, IDictionary<string, string> resolution = null)
+        public static EntityRecommendation EntityFor(string type, string entity, IDictionary<string, object> resolution = null)
         {
             return new EntityRecommendation(type: type) { Entity = entity, Resolution = resolution };
         }
 
         public static EntityRecommendation EntityForDate(string type, DateTime date)
         {
-            return EntityFor(type, 
+            return EntityFor(type,
                 date.ToString("d", DateTimeFormatInfo.InvariantInfo),
-                new Dictionary<string, string>()
+                new Dictionary<string, object>()
                 {
                     { "resolution_type", "builtin.datetime.date" },
                     { "date", date.ToString("yyyy-MM-dd", DateTimeFormatInfo.InvariantInfo) }
@@ -85,7 +83,7 @@ namespace Microsoft.Bot.Builder.Tests
         {
             return EntityFor(type,
                 time.ToString("t", DateTimeFormatInfo.InvariantInfo),
-                new Dictionary<string, string>()
+                new Dictionary<string, object>()
                 {
                     { "resolution_type", "builtin.datetime.time" },
                     { "time", time.ToString("THH:mm:ss", DateTimeFormatInfo.InvariantInfo) }
@@ -120,6 +118,9 @@ namespace Microsoft.Bot.Builder.Tests
             luis
                 .Setup(l => l.BuildUri(It.Is<LuisRequest>(r => r.Query == utterance)))
                 .Returns(uri);
+
+            luis.Setup(l => l.ModifyRequest(It.IsAny<LuisRequest>()))
+                .Returns<LuisRequest>(r => r);
 
             luis
                 .Setup(l => l.QueryAsync(uri, It.IsAny<CancellationToken>()))
@@ -299,7 +300,7 @@ namespace Microsoft.Bot.Builder.Tests
                 await AssertScriptAsync(container, "hello", EntityTwo);
             }
         }
-        
+
 
         [TestMethod]
         public async Task Service_With_LuisActionDialog()
@@ -317,6 +318,10 @@ namespace Microsoft.Bot.Builder.Tests
                 );
 
             service
+                .Setup(l => l.ModifyRequest(It.IsAny<LuisRequest>()))
+                .Returns<LuisRequest>(r => r);
+
+            service
                 .Setup(l => l.QueryAsync(It.Is<Uri>(t => t.AbsoluteUri.Contains($"&contextId={contextId}")), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new LuisResult()
                 {
@@ -325,7 +330,7 @@ namespace Microsoft.Bot.Builder.Tests
                         new IntentRecommendation()
                         {
                             Intent = intent,
-                            Score =  1.0, 
+                            Score =  1.0,
                             Actions =  new List<Action>
                             {
                                 new Action
@@ -384,7 +389,7 @@ namespace Microsoft.Bot.Builder.Tests
                         Prompt = prompt
                     }
                 });
-            
+
 
             var dialog = new MultiServiceLuisDialog(service.Object);
             using (new FiberTestBase.ResolveMoqAssembly(service.Object))
@@ -426,14 +431,14 @@ namespace Microsoft.Bot.Builder.Tests
         [TestMethod]
         public void UrlEncoding_UTF8_Then_Hex()
         {
-            ILuisService service = new LuisService(new LuisModelAttribute("modelID", "subscriptionID", LuisApiVersion.V1));
+            ILuisService service = new LuisService(new LuisModelAttribute("modelID", "subscriptionID"));
 
             var uri = service.BuildUri("Français");
 
             // https://github.com/Microsoft/BotBuilder/issues/247
             // https://github.com/Microsoft/BotBuilder/pull/76
-            Assert.AreNotEqual("https://api.projectoxford.ai/luis/v1/application?subscription-key=subscriptionID&q=Fran%25u00e7ais&id=modelID", uri.AbsoluteUri);
-            Assert.AreEqual("https://api.projectoxford.ai/luis/v1/application?subscription-key=subscriptionID&q=Fran%C3%A7ais&id=modelID", uri.AbsoluteUri);
+            Assert.AreNotEqual("https://westus.api.cognitive.microsoft.com/luis/v2.0/apps/modelID?subscription-key=subscriptionID&q=Fran%25u00e7ais&log=True", uri.AbsoluteUri);
+            Assert.AreEqual("https://westus.api.cognitive.microsoft.com/luis/v2.0/apps/modelID?subscription-key=subscriptionID&q=Fran%C3%A7ais&log=True", uri.AbsoluteUri);
         }
     }
 }

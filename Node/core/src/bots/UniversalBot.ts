@@ -32,14 +32,15 @@
 //
 
 import { Library, systemLib, IRouteResult } from './Library';
-import { IDialogWaterfallStep } from '../dialogs/SimpleDialog';
-import { Session, ISessionMiddleware } from '../Session';
+import { IDialogWaterfallStep } from '../dialogs/WaterfallDialog';
+import { Session, ISessionMiddleware, IConnector } from '../Session';
 import { DefaultLocalizer } from '../DefaultLocalizer';
 import { IBotStorage, IBotStorageContext, IBotStorageData, MemoryBotStorage } from '../storage/BotStorage';
-import { IIntentRecognizerResult } from '../dialogs/IntentRecognizerSet';
+import { IIntentRecognizerResult } from '../dialogs/IntentRecognizer';
+import { SessionLogger } from '../SessionLogger';
+import { RemoteSessionLogger } from '../RemoteSessionLogger';
 import * as consts from '../consts';
 import * as utils from '../utils';
-import * as logger from '../logger';
 import * as async from 'async';
 
 export interface IUniversalBotSettings {
@@ -53,16 +54,6 @@ export interface IUniversalBotSettings {
     persistUserData?: boolean;
     persistConversationData?: boolean;
     dialogErrorMessage?: string|string[]|IMessage|IIsMessage;
-}
-
-export interface IConnector {
-    onEvent(handler: (events: IEvent[], cb?: (err: Error) => void) => void): void;
-    onInvoke?(handler: (event: IEvent, cb?: (err: Error, body: any, status?: number) => void) => void): void;
-    send(messages: IMessage[], cb: (err: Error) => void): void;
-    startConversation(address: IAddress, cb: (err: Error, address?: IAddress) => void): void;
-}
-interface IConnectorMap {
-    [channel: string]: IConnector;    
 }
 
 export interface IMiddlewareMap {
@@ -83,12 +74,15 @@ export interface IDisambiguateRouteHandler {
     (session: Session, routes: IRouteResult[]): void;
 }
 
+interface IConnectorMap {
+    [channel: string]: IConnector;    
+}
 
 export class UniversalBot extends Library {
     private settings = <IUniversalBotSettings>{ 
         processLimit: 4, 
         persistUserData: true, 
-        persistConversationData: false 
+        persistConversationData: true 
     };
     private connectors = <IConnectorMap>{}; 
     private mwReceive = <IEventMiddleware[]>[];
@@ -272,7 +266,7 @@ export class UniversalBot extends Library {
         }, this.errorLogger(done));
     }
     
-    public send(messages: IIsMessage|IMessage|IMessage[], done?: (err: Error) => void): void {
+    public send(messages: IIsMessage|IMessage|IMessage[], done?: (err: Error, addresses: IAddress[]) => void): void {
         var list: IMessage[];
         if (Array.isArray(messages)) {
             list = messages;
@@ -291,7 +285,7 @@ export class UniversalBot extends Library {
                 }, cb);
             }, cb);
         }, this.errorLogger((err) => {
-            if (!err) {
+            if (!err && list.length > 0) {
                 this.tryCatch(() => {
                     // All messages should be targeted at the same channel.
                     var channelId = list[0].address.channelId;
@@ -302,7 +296,7 @@ export class UniversalBot extends Library {
                     connector.send(list, this.errorLogger(done));
                 }, this.errorLogger(done));
             } else if (done) {
-                done(null);
+                done(err, null);
             }
         }));
     }
@@ -421,10 +415,24 @@ export class UniversalBot extends Library {
                 var defaultLocale = this.settings.localizerSettings ? this.settings.localizerSettings.defaultLocale : null;
                 this.localizer = new DefaultLocalizer(this, defaultLocale);
             }
+
+            // Create logger
+            let logger: SessionLogger;
+            if (message.source == consts.emulatorChannel) {
+                logger = new RemoteSessionLogger(this.connector(consts.emulatorChannel), message.address, message.address);
+            } else if (data.privateConversationData && data.privateConversationData.hasOwnProperty(consts.Data.DebugAddress)) {
+                var debugAddress = data.privateConversationData[consts.Data.DebugAddress];
+                logger = new RemoteSessionLogger(this.connector(consts.emulatorChannel), debugAddress, message.address);
+            } else {
+                logger = new SessionLogger();
+            }
+
             // Initialize session
             var session = new Session({
                 localizer: this.localizer,
+                logger: logger,
                 autoBatchDelay: this.settings.autoBatchDelay,
+                connector: this.connector(message.address.channelId),
                 library: this,
                 //actions: this.actions,
                 middleware: this.mwSession,
@@ -462,6 +470,18 @@ export class UniversalBot extends Library {
     }
 
     private routeMessage(session: Session, done: (err: Error) => void): void {
+        // Log start of routing
+        var entry = 'UniversalBot("' + this.name + '") routing ';
+        if (session.message.text) {
+            entry += '"' + session.message.text + '"';
+        } else if (session.message.attachments && session.message.attachments.length > 0) {
+            entry += session.message.attachments.length + ' attachment(s)';
+        } else {
+            entry += '<null>';
+        }
+        entry += ' from "' + session.message.source + '"';
+        session.logger.log(null, entry);
+        
         // Run the root libraries recognizers
         var context = session.toRecognizeContext();
         this.recognize(context, (err, topIntent) => {
@@ -612,13 +632,13 @@ export class UniversalBot extends Library {
         return this.settings.storage;
     }
     
-    private tryCatch(fn: Function, error?: (err?: Error) => void): void {
+    private tryCatch(fn: Function, error?: (err?: Error, results?: any) => void): void {
         try {
             fn();
         } catch (e) {
             try {
                 if (error) {
-                    error(e);
+                    error(e, null);
                 }
             } catch (e2) {
                 this.emitError(e2);
@@ -626,13 +646,13 @@ export class UniversalBot extends Library {
         }
     }
 
-    private errorLogger(done?: (err: Error) => void): (err: Error) => void {
-        return (err: Error) => {
+    private errorLogger(done?: (err: Error, result?: any) => void): (err: Error, result?: any) => void {
+        return (err: Error, result: any) => {
             if (err) {
                 this.emitError(err);
             }
             if (done) {
-                done(err);
+                done(err, result);
                 done = null;
             }
         };

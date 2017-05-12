@@ -36,27 +36,22 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
-
+using Autofac;
 using Microsoft.Bot.Builder.Dialogs;
-using Microsoft.Bot.Connector;
+using Microsoft.Bot.Builder.Dialogs.Internals;
 using Microsoft.Bot.Builder.FormFlow;
 using Microsoft.Bot.Builder.FormFlow.Advanced;
 using Microsoft.Bot.Builder.FormFlow.Json;
 using Microsoft.Bot.Builder.FormFlowTest;
-using Microsoft.Bot.Builder.Dialogs.Internals;
 using Microsoft.Bot.Builder.Internals.Fibers;
 using Microsoft.Bot.Builder.Luis.Models;
+using Microsoft.Bot.Connector;
 using Microsoft.Bot.Sample.AnnotatedSandwichBot;
-
-using Moq;
-using Autofac;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
-
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace Microsoft.Bot.Builder.Tests
 {
@@ -116,19 +111,17 @@ namespace Microsoft.Bot.Builder.Tests
             try
             {
                 using (var stream = new StreamReader(filePath))
-                using (var container = Build(Options.ResolveDialogFromContainer | Options.Reflection))
+                using (var container = Build(Options.Reflection))
                 {
-                    var root = new FormDialog<T>(currentState, buildForm, options, entities, CultureInfo.GetCultureInfo(locale));
-                    var builder = new ContainerBuilder();
-                    builder
-                        .RegisterInstance(root)
-                        .AsSelf()
-                        .As<IDialog<object>>();
-                    builder.Update(container);
+                    Func<IDialog<object>> makeRoot = () => new FormDialog<T>(currentState, buildForm, options, entities);
                     Assert.AreEqual(locale, stream.ReadLine());
                     Assert.AreEqual(SerializeToJson(initialState), stream.ReadLine());
                     Assert.AreEqual(SerializeToJson(entities), stream.ReadLine());
-                    await Script.VerifyScript(container, false, stream, (state) => Assert.AreEqual(state, SerializeToJson(currentState)), inputs);
+                    await Script.VerifyScript(container, makeRoot, false, stream, (stack, state) =>
+                    {
+                        var form = ((FormDialog<T>)stack.Frames[0].Target);
+                        Assert.AreEqual(state, SerializeToJson(form.State));
+                    }, inputs, locale);
                 }
             }
             catch (Exception)
@@ -395,6 +388,45 @@ Is this what you wanted? {||}")
                 "yes"
                 );
         }
+
+        [TestMethod]
+        [DeploymentItem(@"Scripts\SimpleForm-Limits.script")]
+        public async Task SimpleForm_Limits_Script()
+        {
+            var pathScript = TestFiles.DeploymentItemPathsForCaller(TestContext, this.GetType()).Single();
+            await VerifyFormScript(pathScript,
+                "en-us",
+                () => new FormBuilder<SimpleForm>().Build(),
+                FormOptions.None, new SimpleForm(), Array.Empty<EntityRecommendation>(),
+                "hi",
+                "integer",
+                // Test the limits of int vs long
+                ((long)int.MaxValue + 1).ToString(),
+                ((long)int.MinValue - 1).ToString(),
+
+                // Test the limits beyond long
+                long.MaxValue.ToString() + "1",
+                long.MinValue.ToString() + "1",
+
+                // Min and max accepted values
+                int.MaxValue.ToString(),
+                "back",
+                int.MinValue.ToString(),
+
+                // Test the limits of float vs. double
+                ((double)float.MaxValue + 1.0).ToString(),
+                ((double)float.MinValue * 2.0).ToString(),
+
+                // Test limits beyond double
+                (double.MaxValue).ToString().Replace("308", "309"),
+                (double.MinValue).ToString().Replace("308", "309"),
+                
+                // Min and max accepted values
+                float.MaxValue.ToString(),
+                "back",
+                float.MinValue.ToString(),
+                "quit");
+          }
 
         [TestMethod]
         [DeploymentItem(@"Scripts\PizzaForm.script")]
